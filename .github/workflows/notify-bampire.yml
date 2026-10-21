@@ -1,0 +1,78 @@
+name: 晩杯屋の新メニュー通知
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run: 確認 / test-webhook: テスト先へ1件送信 / init: 初期化 / notify: 通知'
+        type: choice
+        options: [dry-run, test-webhook, init, notify]
+        default: dry-run
+      destination:
+        description: 通知先（テスト／本番の履歴とWebhookを分離）
+        type: choice
+        options: [bampire-test, bampire-prod]
+        default: bampire-test
+      history:
+        description: dry-runで既存の通知履歴を参照するか
+        type: choice
+        options: [none, github]
+        default: none
+
+permissions:
+  contents: read
+
+# Initialization, manual sends and scheduled sends use the same lock.
+concurrency:
+  group: menu-watch-bampire
+  cancel-in-progress: false
+
+jobs:
+  dry-run:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: 候補を表示（送信・履歴更新なし）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DESTINATION: ${{ inputs.destination }}
+          HISTORY: ${{ inputs.history }}
+        run: python menu_watch.py dry-run --destination "$DESTINATION" --state "$HISTORY"
+
+  write:
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      ((github.event_name == 'schedule' && vars.MENU_WATCH_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.mode != 'dry-run'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    environment: ${{ github.event_name == 'schedule' && 'menu-watch-prod' || inputs.destination == 'bampire-prod' && 'menu-watch-prod' || 'menu-watch-test' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: テスト
+        run: python -m unittest discover -s tests -q
+      - name: 履歴を初期化、または新規候補を通知
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WATCH_MODE: ${{ github.event_name == 'schedule' && 'notify' || inputs.mode }}
+          DESTINATION: ${{ github.event_name == 'schedule' && 'bampire-prod' || inputs.destination }}
+        run: python menu_watch.py "$WATCH_MODE" --destination "$DESTINATION"

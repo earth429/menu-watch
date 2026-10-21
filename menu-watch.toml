@@ -1,0 +1,15 @@
+# 設定後は python3 scripts/update_schedule.py を実行してworkflowへ反映します。
+[schedule]
+frequency = "daily" # daily / hourly
+hour_jst = 15        # dailyの実行時刻（日本時間）
+minute = 17
+
+[watch]
+scope = "common"         # 現在は共通告知のみ対応。店舗別投稿は除外します。
+include_revivals = true
+lookback_hours = 48      # 前回失敗時も拾えるよう、実行間隔より長くします。
+max_pages = 3           # 1〜5
+max_notifications = 3   # 1〜3件／実行
+
+[notification]
+style = "summary" # summary: 商品名・価格とリンク / original: 投稿本文とリンク

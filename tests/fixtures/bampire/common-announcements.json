@@ -1,0 +1,56 @@
+{
+  "code": 200,
+  "results": [
+    {
+      "type": "status",
+      "id": "2110950496186044595",
+      "text": "★晩杯屋新メニュー★\n本日オンメニューは\n\nマカロニサラダ（カニカマ入り）190円\n豚タン野菜炒め310円\n\nカニカマ入りのまろやかマカロニサラダ！\n豚タン野菜炒めは、しっかり味でお酒がすすむ一品です！\nぜひ晩杯屋でどうぞ！\n#晩杯屋 #せんべろ #マカロニサラダ #豚タン野菜炒め",
+      "created_timestamp": 1792124792,
+      "replying_to": null,
+      "reposted_by": null,
+      "author": {
+        "id": "1158210930158649345",
+        "screen_name": "bampirePR"
+      }
+    },
+    {
+      "type": "status",
+      "id": "2110204211183145160",
+      "text": "★晩杯屋新メニュー★\n\n本日オンメニューは\nオクラ天　190円\n\n大人気スーパーサブが戻ってきました！\n揚げ物だけど野菜だと罪悪感少なめですね\n\n＃晩杯屋 ＃せんべろ ＃オクラ　#天ぷら",
+      "created_timestamp": 1791946864,
+      "replying_to": null,
+      "reposted_by": null,
+      "author": {
+        "id": "1158210930158649345",
+        "screen_name": "bampirePR"
+      }
+    },
+    {
+      "type": "status",
+      "id": "2108391724188119145",
+      "text": "★晩杯屋新メニュー★\n本日オンメニューは\n\n【うずらスタミナ190円】\n\nひと口サイズでパクッと食べやすい！\nしっかり味のうずらは、お酒のお供にもぴったりです。\n\nぜひ晩杯屋でどうぞ！\n＃晩杯屋 ＃せんべろ ＃うずらスタミナ　#うずら",
+      "created_timestamp": 1791514733,
+      "replying_to": null,
+      "reposted_by": null,
+      "author": {
+        "id": "1158210930158649345",
+        "screen_name": "bampirePR"
+      }
+    },
+    {
+      "type": "status",
+      "id": "2107756003609673941",
+      "text": "★晩杯屋新メニュー★\n\n本日オンメニューは\n\nウィンナーファイブⅡ   110円\n豚天　190円\n\n人気な５人🐙？が帰ってきました！\n少し懐かしさある赤い色が食欲をそそりますね\n\n＃晩杯屋 ＃せんべろ ＃ウィンナー　#豚　#天ぷら",
+      "created_timestamp": 1791363166,
+      "replying_to": null,
+      "reposted_by": null,
+      "author": {
+        "id": "1158210930158649345",
+        "screen_name": "bampirePR"
+      }
+    }
+  ],
+  "cursor": {
+    "bottom": null
+  }
+}
