@@ -372,6 +372,18 @@ def send_discord(http: HTTP, url: str, content: str) -> str:
     return message_id
 
 
+def verify_webhook(http: HTTP, url: str) -> str:
+    """Confirm an incoming webhook without posting a message or logging its metadata."""
+    expected_id = webhook_identity(url)
+    result = http.json("GET", url)
+    if (not isinstance(result, dict) or result.get("id") != expected_id
+            or type(result.get("type")) is not int or result["type"] != 1
+            or not isinstance(result.get("channel_id"), str)
+            or not ID.fullmatch(result["channel_id"])):
+        raise WatchError("Webhook could not be verified; state was not initialized")
+    return expected_id
+
+
 def new_state(destination: str, webhook_id: str, now: datetime) -> dict:
     return {"version": 1, "author_id": AUTHOR_ID, "destination": destination,
             "webhook_id": webhook_id, "started_at": stamp(now), "posts": {}}
@@ -561,7 +573,7 @@ def main(argv=None):
             store = GitHubState(http, os.environ.get("GITHUB_REPOSITORY", ""),
                                 os.environ.get("GH_TOKEN", ""), args.destination)
             if args.mode == "init":
-                webhook_id = webhook_identity(os.environ.get("DISCORD_WEBHOOK_URL", ""))
+                webhook_id = verify_webhook(http, os.environ.get("DISCORD_WEBHOOK_URL", ""))
                 store.initialize(new_state(args.destination, webhook_id, now))
                 print("State initialized at current time; no Discord message sent")
                 return 0

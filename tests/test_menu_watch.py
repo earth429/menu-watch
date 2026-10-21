@@ -352,6 +352,27 @@ class StateTests(unittest.TestCase):
 
 
 class HTTPAndCLITests(unittest.TestCase):
+    def test_webhook_verification_is_read_only(self):
+        http = Mock()
+        http.json.return_value = {'id':'123456','type':1,'channel_id':'654321'}
+        self.assertEqual(mw.verify_webhook(http, WEBHOOK), '123456')
+        http.json.assert_called_once_with('GET', WEBHOOK)
+
+    def test_invalid_webhook_metadata_is_rejected(self):
+        for data in ({}, {'id':'123456','type':2,'channel_id':'654321'},
+                     {'id':'222222','type':1,'channel_id':'654321'},
+                     {'id':'123456','type':1,'channel_id':None}):
+            http = Mock()
+            http.json.return_value = data
+            with self.assertRaises(mw.WatchError):
+                mw.verify_webhook(http, WEBHOOK)
+
+    def test_init_never_creates_state_when_webhook_verification_fails(self):
+        with patch.object(mw, 'verify_webhook', side_effect=mw.WatchError('Verification failed')):
+            with patch.object(mw, 'GitHubState') as store, redirect_stderr(io.StringIO()):
+                self.assertEqual(mw.main(['init']), 1)
+                store.return_value.initialize.assert_not_called()
+
     def test_manual_connection_test_sends_once_without_state(self):
         with patch.dict(mw.os.environ, {'DISCORD_WEBHOOK_URL':WEBHOOK}):
             with patch.object(mw, 'send_discord', return_value='987654') as send:
