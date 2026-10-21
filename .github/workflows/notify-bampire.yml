@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'dry-run: 確認 / test-webhook: テスト先へ1件送信 / init: 初期化 / notify: 通知'
+        description: 'dry-run: 確認 / test-webhook: テスト送信 / init: 初期化 / notify: 通知 / refresh-preview: 既存カード更新'
         type: choice
-        options: [dry-run, test-webhook, init, notify]
+        options: [dry-run, test-webhook, init, notify, refresh-preview]
         default: dry-run
       destination:
         description: 通知先（テスト／本番の履歴とWebhookを分離）
@@ -21,7 +21,7 @@ on:
         options: [none, github]
         default: none
       post_id:
-        description: '任意: 指定した1投稿だけを対象にする。期間内なら初期化前も対象（dry-run/notify専用）'
+        description: '任意: 対象投稿の数値ID。refresh-previewでは必須。dry-run/notifyでは省略可'
         type: string
         default: ''
 
@@ -74,7 +74,7 @@ jobs:
           python-version: '3.11'
       - name: テスト
         run: python -m unittest discover -s tests -q
-      - name: 履歴を初期化、または新規候補を通知
+      - name: 通知・初期化・カード更新を実行
         env:
           GH_TOKEN: ${{ github.token }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

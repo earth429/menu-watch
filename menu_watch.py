@@ -57,6 +57,7 @@ class Settings:
     max_pages: int = 3
     max_notifications: int = 3
     message_style: str = "summary"
+    link_preview: bool = True
 
     @property
     def cron_utc(self) -> str:
@@ -79,7 +80,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     allowed = {
         "schedule": {"frequency", "hour_jst", "minute"},
         "watch": {"scope", "include_revivals", "lookback_hours", "max_pages", "max_notifications"},
-        "notification": {"style"},
+        "notification": {"style", "link_preview"},
     }
     if set(data) - set(allowed) or any(
             not isinstance(values, dict) or set(values) - allowed[section]
@@ -95,11 +96,12 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         lookback_hours=watch.get("lookback_hours", 48), max_pages=watch.get("max_pages", 3),
         max_notifications=watch.get("max_notifications", 3),
         message_style=notification.get("style", "summary"),
+        link_preview=notification.get("link_preview", True),
     )
     if (watch.get("scope", "common") != "common"
             or settings.frequency not in ("daily", "hourly")
             or settings.message_style not in ("summary", "original")
-            or type(settings.include_revivals) is not bool):
+            or type(settings.include_revivals) is not bool or type(settings.link_preview) is not bool):
         raise WatchError("Unsupported notification scope or settings value")
     for value, lower, upper in ((settings.hour_jst, 0, 23), (settings.minute, 0, 59),
                                 (settings.lookback_hours, 1, 168), (settings.max_pages, 1, 5),
@@ -242,6 +244,34 @@ class MenuPost:
     items: tuple[tuple[str, int], ...]
     notes: tuple[str, ...] = ()
     original_text: str = ""
+    image_url: str | None = None
+
+
+def preview_image_url(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 2048:
+        return None
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if (parsed.scheme == "https" and parsed.netloc == "pbs.twimg.com"
+            and re.fullmatch(r"/media/[A-Za-z0-9_.-]+", parsed.path)
+            and not parsed.fragment
+            and not any(unicodedata.category(c).startswith("C") for c in value)):
+        return value
+    return None
+
+
+def first_post_image(post: dict) -> str | None:
+    media = post.get("media")
+    photos = media.get("photos") if isinstance(media, dict) else None
+    if isinstance(photos, list):
+        for photo in photos:
+            if isinstance(photo, dict) and photo.get("type") == "photo":
+                url = preview_image_url(photo.get("url"))
+                if url:
+                    return url
+    return None
 
 
 def parse_menu(post: dict, now: datetime, start: datetime,
@@ -337,7 +367,7 @@ def parse_menu(post: dict, now: datetime, start: datetime,
                 return None, "unknown-or-unpriced-line"
     if not items or len(items) > 10 or len({name for name, _ in items}) != len(items):
         return None, "missing-or-duplicate-items"
-    result = MenuPost(post_id, posted, tuple(items), tuple(notes), post["text"])
+    result = MenuPost(post_id, posted, tuple(items), tuple(notes), post["text"], first_post_image(post))
     if len(format_message(result, settings).encode("utf-16-le")) // 2 > 2000:
         return None, "message-too-long"
     return result, "candidate"
@@ -359,6 +389,23 @@ def format_message(post: MenuPost, settings: Settings = DEFAULT_SETTINGS) -> str
     return "\n".join(lines)
 
 
+def build_preview(post: MenuPost, settings: Settings = DEFAULT_SETTINGS) -> dict | None:
+    if not settings.link_preview:
+        return None
+    embed = {"title": "晩杯屋【公式】の投稿",
+             "url": f"https://x.com/{HANDLE}/status/{post.id}", "timestamp": stamp(post.timestamp)}
+    if post.original_text and settings.message_style == "summary":
+        text = escape_discord(post.original_text)
+        encoded = text.encode("utf-16-le")
+        if len(encoded) > 6000:
+            text = encoded[:5998].decode("utf-16-le", errors="ignore") + "…"
+        embed["description"] = text
+    image = preview_image_url(post.image_url)
+    if image:
+        embed["image"] = {"url": image}
+    return embed
+
+
 def webhook_identity(url: str) -> str:
     try:
         parsed = urlsplit(url)
@@ -371,12 +418,17 @@ def webhook_identity(url: str) -> str:
     return parsed.path.split("/")[-2]
 
 
-def send_discord(http: HTTP, url: str, content: str) -> str:
+def discord_payload(content: str, embed=None, link_preview=True) -> dict:
+    payload = {"content": content, "allowed_mentions": {"parse": [], "users": [], "roles": []},
+               "flags": 0 if link_preview else 4}
+    if embed is not None and link_preview:
+        payload["embeds"] = [embed]
+    return payload
+
+
+def send_discord(http: HTTP, url: str, content: str, embed=None, link_preview=True) -> str:
     webhook_identity(url)
-    result = http.json("POST", url + "?wait=true", {
-        "content": content, "allowed_mentions": {"parse": [], "users": [], "roles": []},
-        "flags": 4,  # suppress arbitrary link previews
-    })
+    result = http.json("POST", url + "?wait=true", discord_payload(content, embed, link_preview))
     message_id = result.get("id") if isinstance(result, dict) else None
     if not isinstance(message_id, str) or not ID.fullmatch(message_id):
         raise WatchError("Discord response unconfirmed; no retry")
@@ -554,7 +606,8 @@ def deliver(posts, state, store, http, webhook, now, settings: Settings = DEFAUL
             state["posts"][post.id]["manual"] = True
         store.save(copy.deepcopy(state))  # Must finish remotely before attempting Discord.
         try:
-            message_id = send_discord(http, webhook, format_message(post, settings))
+            message_id = send_discord(http, webhook, format_message(post, settings),
+                                       build_preview(post, settings), settings.link_preview)
         except WatchError:
             state["posts"][post.id].update(status="unknown", finished_at=stamp(utcnow()))
             store.save(copy.deepcopy(state))  # If this fails, remote reservation still prevents resend.
@@ -565,21 +618,59 @@ def deliver(posts, state, store, http, webhook, now, settings: Settings = DEFAUL
         print(json.dumps({"id": post.id, "status": "sent"}))
 
 
+def refresh_preview(post, state, http, webhook, now, settings: Settings = DEFAULT_SETTINGS):
+    validate_state(state, state["destination"], now)
+    if webhook_identity(webhook) != state["webhook_id"]:
+        raise WatchError("Webhook does not match initialized destination")
+    parsed, _ = parse_menu(post, now, now-timedelta(hours=settings.lookback_hours), settings)
+    entry = state["posts"].get(post.get("id"))
+    if parsed is None or not isinstance(entry, dict) or entry.get("status") != "sent":
+        raise WatchError("A verified recent post with a sent message is required for preview refresh")
+    message_id = entry["message_id"]
+    url = webhook + "/messages/" + message_id
+    current = http.json("GET", url)
+    source = f"https://x.com/{HANDLE}/status/{parsed.id}"
+    if (not isinstance(current, dict) or current.get("id") != message_id
+            or current.get("webhook_id") != state["webhook_id"]
+            or not isinstance(current.get("content"), str)
+            or not re.search(re.escape(source) + r"(?![0-9])", current["content"])):
+        raise WatchError("Stored message does not match the selected post; nothing edited")
+    embed = build_preview(parsed, settings)
+    payload = discord_payload(current["content"], embed, settings.link_preview)
+    payload["embeds"] = [embed] if embed else []
+    result = http.json("PATCH", url, payload)
+    flags = result.get("flags", 0) if isinstance(result, dict) else None
+    embeds = result.get("embeds") if isinstance(result, dict) else None
+    if (not isinstance(result, dict) or result.get("id") != message_id or type(flags) is not int
+            or not isinstance(embeds, list)
+            or bool(flags & 4) == settings.link_preview
+            or (settings.link_preview and not any(
+                isinstance(item, dict) and item.get("url") == source
+                for item in embeds))):
+        raise WatchError("Preview edit could not be confirmed; no new message sent")
+    return {"id": parsed.id, "message_id": message_id, "status": "preview-updated",
+            "embed_count": len(embeds),
+            "has_image": any(isinstance(item, dict) and isinstance(item.get("image"), dict)
+                             for item in embeds)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("dry-run", "init", "notify", "test-webhook"),
+    parser.add_argument("mode", choices=("dry-run", "init", "notify", "test-webhook", "refresh-preview"),
                         nargs="?", default="dry-run")
     parser.add_argument("--destination", choices=("bampire-prod", "bampire-test"), default="bampire-test")
     parser.add_argument("--fixture", type=Path, help="dry-run only: offline timeline fixture")
     parser.add_argument("--state", choices=("none", "github"), default="none", help="dry-run history source")
     parser.add_argument("--now", help="dry-run only: ISO timestamp for reproducible fixture playback")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="settings TOML file")
-    parser.add_argument("--post-id", help="notify/dry-run only: explicitly select one recent post, including before initialization")
+    parser.add_argument("--post-id", help="notify/dry-run/refresh-preview: select one recent post")
     args = parser.parse_args(argv)
     args.post_id = args.post_id or None
     if args.post_id is not None and (
-            args.mode not in ("notify", "dry-run") or not ID.fullmatch(args.post_id)):
-        parser.error("--post-id requires a numeric post id and notify or dry-run mode")
+            args.mode not in ("notify", "dry-run", "refresh-preview") or not ID.fullmatch(args.post_id)):
+        parser.error("--post-id requires a numeric post id and notify, dry-run or refresh-preview mode")
+    if args.mode == "refresh-preview" and args.post_id is None:
+        parser.error("refresh-preview requires --post-id")
     if args.mode != "dry-run" and (args.fixture or args.now or args.state != "none"):
         parser.error("--fixture, --now and --state are dry-run options")
     try:
@@ -619,10 +710,16 @@ def main(argv=None):
             posts = [fetch_post(http, args.post_id)]
         else:
             posts = fetch_posts(http, settings)
+        if args.mode == "refresh-preview":
+            result = refresh_preview(posts[0], state, http,
+                                     os.environ.get("DISCORD_WEBHOOK_URL", ""), now, settings)
+            print(json.dumps(result))
+            return 0
         if args.mode == "dry-run":
             pending, report = candidates(posts, state, now, settings, args.post_id)
             print(json.dumps({"dry_run": True, "history_loaded": state is not None,
-                              "notices": [{"id": p.id, "content": format_message(p, settings)} for p in pending],
+                              "notices": [{"id": p.id, "content": format_message(p, settings),
+                                           "preview": build_preview(p, settings)} for p in pending],
                               "examined": report}, ensure_ascii=False, indent=2))
         else:
             deliver(posts, state, store, http, os.environ.get("DISCORD_WEBHOOK_URL", ""), now,

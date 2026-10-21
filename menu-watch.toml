@@ -13,3 +13,4 @@ max_notifications = 3   # 1〜3件／実行
 
 [notification]
 style = "summary" # summary: 商品名・価格とリンク / original: 投稿本文とリンク
+link_preview = true # 元投稿の本文・画像のカードを表示

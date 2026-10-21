@@ -43,6 +43,7 @@ class SettingsTests(unittest.TestCase):
                      '[watch]\nlookback_hours=0', '[watch]\nlookback_hours=169',
                      '[schedule]\nfrequency="weekly"', '[schedule]\nhour_jst=24',
                      '[schedule]\nminute=-1', '[notification]\nstyle="missing"',
+                     '[notification]\nlink_preview="yes"',
                      'bad toml !'):
             with self.subTest(text=text), self.assertRaises(mw.WatchError):
                 self.load(text)

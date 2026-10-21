@@ -69,6 +69,17 @@ URLは `https://discord.com/api[/v10]/webhooks/...` の標準形式だけを許�
 手動の `test-webhook` はテスト先だけに、明示的な接続確認メッセージを送ります。
 投稿通知の履歴は変更せず、再実行するともう1件送信します。
 
+## 元投稿のカード
+
+`notification.link_preview = true` では、検証した元投稿のURL・本文・投稿時刻をカードとして送ります。
+最初の有効な写真があれば表示します。画像URLは `https://pbs.twimg.com/media/` の形式だけを許可します。
+カード本文は3000 UTF-16単位で省略し、メッセージ全体とカードの文字数上限内に収めます。
+`style=original` では本文を重複させず、カードはリンクと画像を中心に表示します。
+
+手動の `refresh-preview --post-id 投稿ID` は、送信履歴のDiscordメッセージIDを使って既存カードを更新します。
+同じWebhookのメッセージで元投稿URLが一致することを確認し、本文と送信履歴を保ったままPATCHします。
+新しいメッセージは作りません。失敗時の自動リトライもありません。
+
 ## Webhookを変更するとき
 
 同じWebhook IDのトークンを再発行した場合は、対応するEnvironmentのSecretを更新できます。
