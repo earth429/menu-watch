@@ -1,7 +1,14 @@
 {
   "author_id": "1158210930158649345",
   "destination": "bampire-prod",
-  "posts": {},
+  "posts": {
+    "2112689033075929439": {
+      "attempt_id": "e867c6d55f5541709d5bd3eac7688fd5",
+      "manual": true,
+      "reserved_at": "2026-10-21T06:54:03.020863+00:00",
+      "status": "reserved"
+    }
+  },
   "started_at": "2026-10-21T06:46:23.668145+00:00",
   "version": 1,
   "webhook_id": "1562353413591662622"
