@@ -4,9 +4,11 @@
   "posts": {
     "2112689033075929439": {
       "attempt_id": "e867c6d55f5541709d5bd3eac7688fd5",
+      "finished_at": "2026-10-21T06:54:05.469750+00:00",
       "manual": true,
+      "message_id": "1562358297389170738",
       "reserved_at": "2026-10-21T06:54:03.020863+00:00",
-      "status": "reserved"
+      "status": "sent"
     }
   },
   "started_at": "2026-10-21T06:46:23.668145+00:00",
