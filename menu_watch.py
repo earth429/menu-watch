@@ -224,6 +224,17 @@ def fetch_posts(http: HTTP, settings: Settings = DEFAULT_SETTINGS) -> list[dict]
     return list(posts.values())
 
 
+def fetch_post(http: HTTP, post_id: str) -> dict:
+    if not ID.fullmatch(post_id):
+        raise WatchError("Invalid requested post id")
+    result = http.json("GET", f"https://api.fxtwitter.com/2/status/{post_id}")
+    if (not isinstance(result, dict) or type(result.get("code")) is not int
+            or result["code"] != 200 or not isinstance(result.get("status"), dict)
+            or result["status"].get("id") != post_id):
+        raise WatchError("Invalid individual post response")
+    return result["status"]
+
+
 @dataclass(frozen=True)
 class MenuPost:
     id: str
@@ -504,11 +515,14 @@ class GitHubState:
         self.head = head
 
 
-def candidates(posts, state, now, settings: Settings = DEFAULT_SETTINGS):
-    start = parse_time(state["started_at"]) if state else now - timedelta(hours=settings.lookback_hours)
+def candidates(posts, state, now, settings: Settings = DEFAULT_SETTINGS, only_post_id=None):
+    window_start = now - timedelta(hours=settings.lookback_hours)
+    start = parse_time(state["started_at"]) if state and only_post_id is None else window_start
     results = {}
     report = []
     for post in posts:
+        if only_post_id is not None and post.get("id") != only_post_id:
+            continue
         candidate, reason = parse_menu(post, now, start, settings)
         if candidate and state and candidate.id in state["posts"]:
             reason = "already-reserved"
@@ -521,15 +535,23 @@ def candidates(posts, state, now, settings: Settings = DEFAULT_SETTINGS):
     return sorted(results.values(), key=lambda item: (item.timestamp, int(item.id)))[:settings.max_notifications], report
 
 
-def deliver(posts, state, store, http, webhook, now, settings: Settings = DEFAULT_SETTINGS):
+def deliver(posts, state, store, http, webhook, now, settings: Settings = DEFAULT_SETTINGS,
+            only_post_id=None):
     validate_state(state, state["destination"], now)
     if webhook_identity(webhook) != state["webhook_id"]:
         raise WatchError("Webhook does not match initialized destination")
-    pending, _ = candidates(posts, state, now, settings)
+    if only_post_id is not None and only_post_id in state["posts"]:
+        print(json.dumps({"id": only_post_id, "status": "already-reserved"}))
+        return
+    pending, _ = candidates(posts, state, now, settings, only_post_id)
+    if only_post_id is not None and not pending:
+        raise WatchError("Requested post is not an eligible common announcement; nothing sent")
     for post in pending:
         # A random nonce also keeps concurrent writers' commits distinct in the same second.
         state["posts"][post.id] = {"status": "reserved", "reserved_at": stamp(utcnow()),
                                     "attempt_id": uuid.uuid4().hex}
+        if only_post_id is not None:
+            state["posts"][post.id]["manual"] = True
         store.save(copy.deepcopy(state))  # Must finish remotely before attempting Discord.
         try:
             message_id = send_discord(http, webhook, format_message(post, settings))
@@ -552,7 +574,12 @@ def main(argv=None):
     parser.add_argument("--state", choices=("none", "github"), default="none", help="dry-run history source")
     parser.add_argument("--now", help="dry-run only: ISO timestamp for reproducible fixture playback")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="settings TOML file")
+    parser.add_argument("--post-id", help="notify/dry-run only: explicitly select one recent post, including before initialization")
     args = parser.parse_args(argv)
+    args.post_id = args.post_id or None
+    if args.post_id is not None and (
+            args.mode not in ("notify", "dry-run") or not ID.fullmatch(args.post_id)):
+        parser.error("--post-id requires a numeric post id and notify or dry-run mode")
     if args.mode != "dry-run" and (args.fixture or args.now or args.state != "none"):
         parser.error("--fixture, --now and --state are dry-run options")
     try:
@@ -588,15 +615,18 @@ def main(argv=None):
                     or not all(isinstance(post, dict) for post in page["results"])):
                 raise WatchError("Invalid fixture")
             posts = page["results"]
+        elif args.post_id:
+            posts = [fetch_post(http, args.post_id)]
         else:
             posts = fetch_posts(http, settings)
         if args.mode == "dry-run":
-            pending, report = candidates(posts, state, now, settings)
+            pending, report = candidates(posts, state, now, settings, args.post_id)
             print(json.dumps({"dry_run": True, "history_loaded": state is not None,
                               "notices": [{"id": p.id, "content": format_message(p, settings)} for p in pending],
                               "examined": report}, ensure_ascii=False, indent=2))
         else:
-            deliver(posts, state, store, http, os.environ.get("DISCORD_WEBHOOK_URL", ""), now, settings)
+            deliver(posts, state, store, http, os.environ.get("DISCORD_WEBHOOK_URL", ""), now,
+                    settings, args.post_id)
         return 0
     except WatchError as exc:
         # WatchError messages are fixed, sanitized strings; never print arbitrary network exceptions.

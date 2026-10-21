@@ -20,6 +20,10 @@ on:
         type: choice
         options: [none, github]
         default: none
+      post_id:
+        description: '任意: 指定した1投稿だけを対象にする。期間内なら初期化前も対象（dry-run/notify専用）'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -48,7 +52,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DESTINATION: ${{ inputs.destination }}
           HISTORY: ${{ inputs.history }}
-        run: python menu_watch.py dry-run --destination "$DESTINATION" --state "$HISTORY"
+          POST_ID: ${{ inputs.post_id }}
+        run: python menu_watch.py dry-run --destination "$DESTINATION" --state "$HISTORY" --post-id "$POST_ID"
 
   write:
     if: >-
@@ -75,4 +80,5 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           WATCH_MODE: ${{ github.event_name == 'schedule' && 'notify' || inputs.mode }}
           DESTINATION: ${{ github.event_name == 'schedule' && 'bampire-prod' || inputs.destination }}
-        run: python menu_watch.py "$WATCH_MODE" --destination "$DESTINATION"
+          POST_ID: ${{ inputs.post_id }}
+        run: python menu_watch.py "$WATCH_MODE" --destination "$DESTINATION" --post-id "$POST_ID"

@@ -162,6 +162,21 @@ class ParseTests(unittest.TestCase):
 
 
 class FetchTests(unittest.TestCase):
+    def test_individual_post_response_and_id_validation(self):
+        http = Mock()
+        http.json.return_value = {'code':200,'status':EXAMPLE}
+        self.assertEqual(mw.fetch_post(http,EXAMPLE['id']), EXAMPLE)
+        http.json.assert_called_once_with('GET','https://api.fxtwitter.com/2/status/'+EXAMPLE['id'])
+        for result in ({}, [], {'code':500,'status':EXAMPLE},
+                       {'code':200,'status':{'id':'999'}}, {'code':200,'status':None}):
+            http.json.return_value = result
+            with self.assertRaises(mw.WatchError):
+                mw.fetch_post(http,EXAMPLE['id'])
+        http.reset_mock()
+        with self.assertRaises(mw.WatchError):
+            mw.fetch_post(http,'bad/id')
+        http.json.assert_not_called()
+
     def test_metric_changes_do_not_cause_false_conflict(self):
         first = copy.deepcopy(EXAMPLE)
         second = copy.deepcopy(EXAMPLE)
@@ -349,6 +364,70 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(mw.WatchError):
             store.initialize(state())
         self.assertEqual(http.json.call_count, 1)
+
+
+class ManualPostTests(unittest.TestCase):
+    def run_delivery(self, posts, current, store, sender):
+        with patch.object(mw,'utcnow',return_value=NOW), patch.object(mw,'send_discord',sender):
+            with redirect_stdout(io.StringIO()):
+                mw.deliver(posts,current,store,Mock(),WEBHOOK,NOW,only_post_id=EXAMPLE['id'])
+
+    def test_selected_post_before_initialization_sends_once_and_keeps_start_time(self):
+        current = mw.new_state('bampire-test','123456',NOW)
+        start = current['started_at']
+        other = post(id='999999999')
+        self.assertEqual(mw.candidates([EXAMPLE,other],current,NOW)[0],[])
+        store = MemoryStore(current)
+        sender = Mock(return_value='987654')
+        self.run_delivery([EXAMPLE,other],current,store,sender)
+        self.assertEqual(list(store.value['posts']),[EXAMPLE['id']])
+        self.assertEqual(store.value['started_at'],start)
+        self.assertTrue(store.value['posts'][EXAMPLE['id']]['manual'])
+        self.assertEqual(store.value['posts'][EXAMPLE['id']]['status'],'sent')
+        self.run_delivery([EXAMPLE],copy.deepcopy(store.value),store,sender)
+        sender.assert_called_once()
+
+    def test_manual_selection_does_not_bypass_age_identity_or_heading(self):
+        values = [post(created_timestamp=int((NOW-timedelta(hours=49)).timestamp())),
+                  post(author={'id':'123','screen_name':'bampirePR'}),
+                  post(text='天満店のおすすめ\nヤゲン軟骨200円')]
+        for value in values:
+            with self.subTest(value=value):
+                current = mw.new_state('bampire-test','123456',NOW)
+                store, sender = MemoryStore(current), Mock()
+                with self.assertRaises(mw.WatchError):
+                    self.run_delivery([value],current,store,sender)
+                sender.assert_not_called()
+                self.assertEqual(store.saves,[])
+
+    def test_manual_reservation_failure_never_sends(self):
+        current = mw.new_state('bampire-test','123456',NOW)
+        store, sender = MemoryStore(current,fail_at=1), Mock()
+        with self.assertRaises(mw.WatchError):
+            self.run_delivery([EXAMPLE],current,store,sender)
+        sender.assert_not_called()
+
+    def test_preview_fetches_only_requested_post_and_respects_history(self):
+        with patch.object(mw,'GitHubState') as store, patch.object(mw,'utcnow',return_value=NOW):
+            store.return_value.load.return_value = mw.new_state('bampire-test','123456',NOW)
+            with patch.object(mw,'fetch_post',return_value=EXAMPLE) as fetch:
+                with patch.object(mw,'fetch_posts') as timeline, patch.object(mw,'send_discord') as send:
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        result = mw.main(['dry-run','--post-id',EXAMPLE['id'],'--state','github'])
+                    self.assertEqual(result,0)
+                    self.assertEqual(json.loads(output.getvalue())['notices'][0]['id'],EXAMPLE['id'])
+                    fetch.assert_called_once()
+                    timeline.assert_not_called()
+                    send.assert_not_called()
+                    store.return_value.save.assert_not_called()
+
+    def test_post_id_restricted_to_notify_and_preview(self):
+        for args in (['init','--post-id',EXAMPLE['id']],
+                     ['test-webhook','--post-id',EXAMPLE['id']],
+                     ['notify','--post-id','invalid/id']):
+            with self.subTest(args=args), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                mw.main(args)
 
 
 class HTTPAndCLITests(unittest.TestCase):
