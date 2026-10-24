@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 import tomllib
 import unicodedata
 import uuid
@@ -22,7 +23,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 AUTHOR_ID = "1158210930158649345"
 HANDLE = "bampirePR"
-TIMELINE = f"https://api.fxtwitter.com/2/profile/{HANDLE}/statuses"
+TIMELINE = f"https://api.fxtwitter.com/2/profile/id:{AUTHOR_ID}/statuses"
+SOURCE_ATTEMPTS = 2
+SOURCE_RETRY_DELAY = 2
+SOURCE_RETRY_STATUSES = frozenset((404, 408, 500, 502, 503, 504))
 ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HEADER = re.compile(r"[★☆*【】\[\]「」『』・●◆■◇]*晩杯屋新メニュー[★☆*【】\[\]「」『』・●◆■◇]*\Z")
@@ -42,9 +46,13 @@ class WatchError(Exception):
 
 
 class RemoteError(WatchError):
-    def __init__(self, status: int):
+    def __init__(self, status: int, operation: str = "HTTP request"):
         self.status = status
-        super().__init__(f"HTTP request failed (status {status}); no retry")
+        super().__init__(f"{operation} failed (status {status})")
+
+
+class NetworkError(WatchError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -179,8 +187,26 @@ class HTTP:
             exc.close()
             raise RemoteError(status) from None
         except (URLError, OSError, ValueError, HTTPException):
-            raise WatchError("Network request failed; outcome may be unknown; no retry") from None
+            raise NetworkError("Network request failed; outcome may be unknown") from None
         return decode_json(raw)
+
+
+def read_source(http: HTTP, url: str, operation: str):
+    """Retry only public source GETs; never state operations or Discord delivery."""
+    for attempt in range(1, SOURCE_ATTEMPTS + 1):
+        try:
+            return http.json("GET", url)
+        except (RemoteError, NetworkError) as exc:
+            retryable = isinstance(exc, NetworkError) or exc.status in SOURCE_RETRY_STATUSES
+            if not retryable or attempt == SOURCE_ATTEMPTS:
+                raise WatchError(f"{operation}: {exc}; source retrieval stopped") from None
+            print(json.dumps({"operation": operation, "attempt": attempt,
+                              "max_attempts": SOURCE_ATTEMPTS,
+                              "status": exc.status if isinstance(exc, RemoteError) else "network-error",
+                              "retry_in_seconds": SOURCE_RETRY_DELAY}), file=sys.stderr)
+            time.sleep(SOURCE_RETRY_DELAY)
+        except WatchError as exc:
+            raise WatchError(f"{operation}: {exc}") from None
 
 
 def post_facts(post: dict) -> dict:
@@ -199,9 +225,9 @@ def fetch_posts(http: HTTP, settings: Settings = DEFAULT_SETTINGS) -> list[dict]
     posts = {}
     cursor = None
     cursors = set()
-    for _ in range(settings.max_pages):
+    for index in range(settings.max_pages):
         url = TIMELINE + ("?" + urlencode({"cursor": cursor}) if cursor else "")
-        page = http.json("GET", url)
+        page = read_source(http, url, f"FxEmbed timeline page {index+1}")
         if (not isinstance(page, dict) or type(page.get("code")) is not int
                 or page["code"] != 200 or not isinstance(page.get("results"), list)
                 or not isinstance(page.get("cursor"), dict)):
@@ -229,7 +255,7 @@ def fetch_posts(http: HTTP, settings: Settings = DEFAULT_SETTINGS) -> list[dict]
 def fetch_post(http: HTTP, post_id: str) -> dict:
     if not ID.fullmatch(post_id):
         raise WatchError("Invalid requested post id")
-    result = http.json("GET", f"https://api.fxtwitter.com/2/status/{post_id}")
+    result = read_source(http, f"https://api.fxtwitter.com/2/status/{post_id}", "FxEmbed individual post")
     if (not isinstance(result, dict) or type(result.get("code")) is not int
             or result["code"] != 200 or not isinstance(result.get("status"), dict)
             or result["status"].get("id") != post_id):
@@ -498,7 +524,12 @@ class GitHubState:
         self.head = None
 
     def api(self, method, path, payload=None):
-        result = self.http.json(method, self.base + path, payload, self.headers, timeout=10)
+        try:
+            result = self.http.json(method, self.base + path, payload, self.headers, timeout=10)
+        except RemoteError as exc:
+            raise RemoteError(exc.status, "GitHub state request") from None
+        except WatchError as exc:
+            raise WatchError(f"GitHub state request: {exc}") from None
         if not isinstance(result, dict):
             raise WatchError("Invalid GitHub response")
         return result
@@ -673,6 +704,7 @@ def main(argv=None):
         parser.error("refresh-preview requires --post-id")
     if args.mode != "dry-run" and (args.fixture or args.now or args.state != "none"):
         parser.error("--fixture, --now and --state are dry-run options")
+    phase = "settings"
     try:
         settings = load_settings(args.config)
         if args.mode == "test-webhook" and args.destination != "bampire-test":
@@ -680,6 +712,7 @@ def main(argv=None):
         now = parse_time(args.now) if args.now else utcnow()
         http = HTTP()
         if args.mode == "test-webhook":
+            phase = "Discord connection test"
             message_id = send_discord(http, os.environ.get("DISCORD_WEBHOOK_URL", ""),
                                       "menu-watch 接続テスト\n"
                                       "このチャンネルに新メニュー告知を通知します。\n"
@@ -688,14 +721,17 @@ def main(argv=None):
             return 0
         state = None
         if args.mode != "dry-run" or args.state == "github":
+            phase = "GitHub state"
             store = GitHubState(http, os.environ.get("GITHUB_REPOSITORY", ""),
                                 os.environ.get("GH_TOKEN", ""), args.destination)
             if args.mode == "init":
+                phase = "webhook verification and state initialization"
                 webhook_id = verify_webhook(http, os.environ.get("DISCORD_WEBHOOK_URL", ""))
                 store.initialize(new_state(args.destination, webhook_id, now))
                 print("State initialized at current time; no Discord message sent")
                 return 0
             state = validate_state(store.load(), args.destination, now)
+        phase = "source retrieval"
         if args.fixture:
             raw = args.fixture.read_bytes()
             if len(raw) > 2 * 1024 * 1024:
@@ -711,26 +747,29 @@ def main(argv=None):
         else:
             posts = fetch_posts(http, settings)
         if args.mode == "refresh-preview":
+            phase = "Discord preview refresh"
             result = refresh_preview(posts[0], state, http,
                                      os.environ.get("DISCORD_WEBHOOK_URL", ""), now, settings)
             print(json.dumps(result))
             return 0
         if args.mode == "dry-run":
+            phase = "candidate analysis"
             pending, report = candidates(posts, state, now, settings, args.post_id)
             print(json.dumps({"dry_run": True, "history_loaded": state is not None,
                               "notices": [{"id": p.id, "content": format_message(p, settings),
                                            "preview": build_preview(p, settings)} for p in pending],
                               "examined": report}, ensure_ascii=False, indent=2))
         else:
+            phase = "notification"
             deliver(posts, state, store, http, os.environ.get("DISCORD_WEBHOOK_URL", ""), now,
                     settings, args.post_id)
         return 0
     except WatchError as exc:
         # WatchError messages are fixed, sanitized strings; never print arbitrary network exceptions.
-        print(f"menu-watch: {exc}", file=sys.stderr)
+        print(f"menu-watch [{phase}]: {exc}", file=sys.stderr)
         return 1
     except OSError:
-        print("menu-watch: local file operation failed", file=sys.stderr)
+        print(f"menu-watch [{phase}]: local file operation failed", file=sys.stderr)
         return 1
 
 

@@ -217,7 +217,7 @@ class FetchTests(unittest.TestCase):
                          {'code': 200, 'results': {}, 'cursor': {}},
                          {'code': 200, 'results': [None], 'cursor': {}},
                          {'code': 200, 'results': []}, [],
-                         mw.RemoteError(429), mw.RemoteError(503), mw.WatchError('timeout')):
+                         mw.RemoteError(429), mw.WatchError('timeout')):
             with self.subTest(response=response):
                 http = Mock()
                 if isinstance(response, Exception):
@@ -227,6 +227,42 @@ class FetchTests(unittest.TestCase):
                 with self.assertRaises(mw.WatchError):
                     mw.fetch_posts(http)
                 self.assertEqual(http.json.call_count, 1)
+
+    def test_numeric_author_id_is_used_for_timeline(self):
+        http = Mock()
+        http.json.return_value = page()
+        mw.fetch_posts(http)
+        self.assertEqual(http.json.call_args.args[1],
+                         f'https://api.fxtwitter.com/2/profile/id:{mw.AUTHOR_ID}/statuses')
+
+    def test_source_404_recovers_once_without_skipping_a_page(self):
+        http = Mock()
+        http.json.side_effect = [page([EXAMPLE],'next'),mw.RemoteError(404),page([EXAMPLE])]
+        with patch.object(mw.time,'sleep') as sleep, redirect_stderr(io.StringIO()):
+            self.assertEqual(mw.fetch_posts(http),[EXAMPLE])
+        self.assertEqual(http.json.call_count,3)
+        self.assertEqual(http.json.call_args_list[1],http.json.call_args_list[2])
+        sleep.assert_called_once_with(mw.SOURCE_RETRY_DELAY)
+
+    def test_source_retry_is_bounded_for_transient_status_and_network_failure(self):
+        for error in (mw.RemoteError(404),mw.RemoteError(503),mw.NetworkError('network failure')):
+            http = Mock()
+            http.json.side_effect = error
+            output = io.StringIO()
+            with self.subTest(error=error), patch.object(mw.time,'sleep') as sleep:
+                with redirect_stderr(output), self.assertRaises(mw.WatchError) as caught:
+                    mw.fetch_posts(http)
+                self.assertEqual(http.json.call_count,2)
+                sleep.assert_called_once()
+                self.assertIn('FxEmbed timeline page 1',str(caught.exception))
+                self.assertNotIn(mw.TIMELINE,output.getvalue())
+
+    def test_individual_post_read_can_recover_from_transient_failure(self):
+        http = Mock()
+        http.json.side_effect = [mw.RemoteError(502),{'code':200,'status':EXAMPLE}]
+        with patch.object(mw.time,'sleep'), redirect_stderr(io.StringIO()):
+            self.assertEqual(mw.fetch_post(http,EXAMPLE['id']),EXAMPLE)
+        self.assertEqual(http.json.call_count,2)
 
 
 class DeliveryTests(unittest.TestCase):
@@ -542,6 +578,20 @@ class HTTPAndCLITests(unittest.TestCase):
                     self.assertEqual(mw.main(['notify']), 1)
             store.return_value.save.assert_not_called()
             send.assert_not_called()
+
+    def test_exhausted_source_retries_never_reserve_or_send(self):
+        http = Mock()
+        http.json.side_effect = mw.RemoteError(404)
+        with patch.object(mw,'HTTP',return_value=http), patch.object(mw,'GitHubState') as store:
+            store.return_value.load.return_value = state()
+            with patch.object(mw,'send_discord') as send, patch.object(mw.time,'sleep'):
+                output = io.StringIO()
+                with redirect_stderr(output):
+                    self.assertEqual(mw.main(['notify']),1)
+                self.assertIn('[source retrieval]',output.getvalue())
+                store.return_value.save.assert_not_called()
+                send.assert_not_called()
+                self.assertEqual(http.json.call_count,2)
 
     def test_notify_rejects_fixture_and_time_override(self):
         for options in (['--fixture',str(FIXTURE)], ['--now',mw.stamp(NOW)], ['--state','github']):
