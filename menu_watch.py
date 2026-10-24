@@ -57,7 +57,7 @@ class NetworkError(WatchError):
 
 @dataclass(frozen=True)
 class Settings:
-    frequency: str = "daily"
+    frequency: str = "hourly"
     hour_jst: int = 15
     minute: int = 17
     include_revivals: bool = True
@@ -98,7 +98,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     watch = data.get("watch", {})
     notification = data.get("notification", {})
     settings = Settings(
-        frequency=schedule.get("frequency", "daily"),
+        frequency=schedule.get("frequency", "hourly"),
         hour_jst=schedule.get("hour_jst", 15), minute=schedule.get("minute", 17),
         include_revivals=watch.get("include_revivals", True),
         lookback_hours=watch.get("lookback_hours", 48), max_pages=watch.get("max_pages", 3),

@@ -1,6 +1,6 @@
 # 設定後は python3 scripts/update_schedule.py を実行してworkflowへ反映します。
 [schedule]
-frequency = "daily" # daily / hourly
+frequency = "hourly" # hourly / daily
 hour_jst = 15        # dailyの実行時刻（日本時間）
 minute = 17
 

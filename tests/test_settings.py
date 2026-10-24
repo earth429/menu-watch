@@ -25,13 +25,13 @@ class SettingsTests(unittest.TestCase):
             path.write_text(text, encoding='utf-8')
             return mw.load_settings(path)
 
-    def test_project_defaults_daily_in_jst(self):
+    def test_project_defaults_hourly(self):
         settings = mw.load_settings()
         self.assertEqual(settings, mw.DEFAULT_SETTINGS)
-        self.assertEqual(settings.cron_utc, '17 6 * * *')
+        self.assertEqual(settings.cron_utc, '17 * * * *')
 
     def test_schedule_converts_early_morning_and_hourly(self):
-        self.assertEqual(self.load('[schedule]\nhour_jst=0\nminute=5').cron_utc, '5 15 * * *')
+        self.assertEqual(self.load('[schedule]\nfrequency="daily"\nhour_jst=0\nminute=5').cron_utc, '5 15 * * *')
         self.assertEqual(self.load('[schedule]\nfrequency="hourly"').cron_utc, '17 * * * *')
 
     def test_unknown_invalid_and_out_of_range_values_fail(self):
