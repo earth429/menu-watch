@@ -81,12 +81,4 @@ jobs:
           WATCH_MODE: ${{ github.event_name == 'schedule' && 'notify' || inputs.mode }}
           DESTINATION: ${{ github.event_name == 'schedule' && 'bampire-prod' || inputs.destination }}
           POST_ID: ${{ inputs.post_id }}
-        run: |
-          extra_args=()
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$WATCH_MODE" == notify &&
-                "$DESTINATION" == bampire-prod && "$POST_ID" == 2122926937798750639 ]]; then
-            config="$RUNNER_TEMP/menu-watch-one-off.toml"
-            sed -E 's/^lookback_hours[[:space:]]*=[[:space:]]*[0-9]+/lookback_hours = 96/' menu-watch.toml > "$config"
-            extra_args+=(--config "$config")
-          fi
-          python menu_watch.py "$WATCH_MODE" --destination "$DESTINATION" --post-id "$POST_ID" "${extra_args[@]}"
+        run: python menu_watch.py "$WATCH_MODE" --destination "$DESTINATION" --post-id "$POST_ID"
