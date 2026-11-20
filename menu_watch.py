@@ -31,8 +31,10 @@ ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HEADER = re.compile(r"[★☆*【】\[\]「」『』・●◆■◇]*晩杯屋新メニュー[★☆*【】\[\]「」『』・●◆■◇]*\Z")
 INTRO = re.compile(r"(?:本日|今日)(?:の)?(?:オンメニュー|新メニュー)(?:は|です)?[!！:：]*\Z")
-ITEM = re.compile(r"(?P<name>.+?)\s*(?P<price>[1-9][0-9]{1,4})\s*円\Z")
-PRICE = re.compile(r"[1-9][0-9]{1,4}\s*円\Z")
+PRICE_PATTERN = r"(?P<price>[1-9][0-9]{1,4})\s*円(?:\s*\((?P<revival>復活|リターン)\))?"
+ITEM = re.compile(rf"(?P<name>.+?)\s*{PRICE_PATTERN}\Z")
+PRICE = re.compile(rf"{PRICE_PATTERN}\Z")
+NEW_ITEM_NOTE = re.compile(r"[^「」]*「(?P<name>[^「」]+)」が新登場[^\w\s]*\Z")
 REVIVAL = re.compile(r"復活|リターン|戻って|帰って")
 UNSUPPORTED = re.compile(
     r"限定|一部店舗|対象店舗|取り扱い店舗|取扱店舗|先行|予約|予告|近日|明日|あす|来週|来月|"
@@ -375,6 +377,8 @@ def parse_menu(post: dict, now: datetime, start: datetime,
                         or re.search(r"(?:各|より|から|につき|価格|税込|税別|値引|割引|均一)$", name)):
                     return None, "ambiguous-item"
                 items.append((name, int(match["price"])))
+                if match["revival"]:
+                    notes.append(f"{name} ({match['revival']})")
                 i += 1
         else:
             for row in rows:
@@ -385,11 +389,15 @@ def parse_menu(post: dict, now: datetime, start: datetime,
                     continue
                 if all(word.startswith("#") for word in row.split()):
                     continue
-                if found_block and (re.search(r"[。!?！？‼]", row)
-                                    or re.search(r"(?:です|ます|ですね|ますね|ください|下さい)[♪~〜!！。]*$", row)):
-                    if REVIVAL.search(row):
-                        notes.append(row)
-                    continue
+                if found_block:
+                    if (re.search(r"[。!?！？‼]", row)
+                            or re.search(r"(?:です|ます|ですね|ますね|ください|下さい)[♪~〜!！。]*$", row)):
+                        if REVIVAL.search(row):
+                            notes.append(row)
+                        continue
+                    introduction = NEW_ITEM_NOTE.fullmatch(row)
+                    if introduction and any(name == introduction["name"] for name, _ in items):
+                        continue
                 return None, "unknown-or-unpriced-line"
     if not items or len(items) > 10 or len({name for name, _ in items}) != len(items):
         return None, "missing-or-duplicate-items"
