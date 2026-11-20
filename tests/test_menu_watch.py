@@ -63,6 +63,7 @@ class ParseTests(unittest.TestCase):
             '2110204211183145160': (('オクラ天',190),),
             '2108391724188119145': (('うずらスタミナ',190),),
             '2107756003609673941': (('ウィンナーファイブII',110),('豚天',190)),
+            '2122926937798750639': (('炊き餃子', 250), ('ヤゲン軟骨', 200), ('揚げたこ焼き', 190)),
         }
         for value in data['results']:
             with self.subTest(id=value['id']):
@@ -72,6 +73,9 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(parsed.items, expected[value['id']])
                 if value['id'] in ('2110204211183145160','2107756003609673941'):
                     self.assertTrue(parsed.notes)
+                if value['id'] == '2122926937798750639':
+                    self.assertIn('ヤゲン軟骨 (リターン)', parsed.notes)
+                    self.assertIn('揚げたこ焼き (リターン)', parsed.notes)
 
     def test_real_shop_posts_and_replies_excluded_even_without_age_limit(self):
         for value in REAL:
@@ -87,6 +91,14 @@ class ParseTests(unittest.TestCase):
     def test_revival_annotation_preserved(self):
         result = self.parse(post('★晩杯屋新メニュー★\n\n復活！\nヤゲン軟骨 200円'))
         self.assertIn('原文注記：復活!', mw.format_message(result))
+
+    def test_revival_annotation_after_price_on_its_own_line(self):
+        value = post('★晩杯屋新メニュー★\n\nヤゲン軟骨\n２００円（復活）')
+        result = self.parse(value)
+        self.assertEqual(result.items, (('ヤゲン軟骨', 200),))
+        self.assertEqual(result.notes, ('ヤゲン軟骨 (復活)',))
+        self.assertEqual(mw.parse_menu(value, NOW, START, mw.Settings(include_revivals=False)),
+                         (None, 'revivals-disabled'))
 
     def test_revival_prose_preserved(self):
         result = self.parse(post('★晩杯屋新メニュー★\n\nヤゲン軟骨 200円\n\n待望の復活です！'))
@@ -115,6 +127,10 @@ class ParseTests(unittest.TestCase):
             '画像をご覧ください！',
             'ヤゲン軟骨 200円\nしらすおろし',
             'ヤゲン軟骨 200円\n\nしらすおろし',
+            'ヤゲン軟骨 200円\n\n「しらすおろし」が新登場🐟',
+            'ヤゲン軟骨 200円\n\n「ヤゲン軟骨」が新登場🐟\nしらすおろし',
+            'ヤゲン軟骨 200円(税別)',
+            'ヤゲン軟骨 200円(リターン)\n\n天満店限定です！',
             'ヤゲン軟骨 200円\nしらすおろし 時価',
             'ヤゲン軟骨・しらすおろし 各200円',
             'ヤゲン軟骨/しらすおろし 200円',
